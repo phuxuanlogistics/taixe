@@ -23,6 +23,8 @@
   button { width:100%; min-height:60px; font-size:22px; font-weight:700; border:0; border-radius:12px; color:#fff; background:#1d4ed8; }
   .chip { display:inline-block; width:auto; min-height:48px; margin:6px 6px 0 0; padding:8px 14px; font-size:18px; font-weight:600; color:#111; background:#e5e7eb; border:2px solid #bbb; }
   .chip.chon { background:#fde68a; border-color:var(--cam); }
+  .nutAnh { display:block; padding:16px; text-align:center; font-weight:700; color:#fff; background:#1d4ed8; border-radius:12px; }
+  .anh { width:72px; height:72px; object-fit:cover; margin:6px 6px 0 0; border-radius:6px; }
 </style>
 </head>
 <body>
@@ -34,6 +36,7 @@ const ID  = new URLSearchParams(location.search).get('id') || '';
 const KQ  = 'pxl_q';                 // hàng đợi chờ gửi (chung mọi chuyến)
 const KT  = 'pxl_trip_' + ID;        // bản lưu thông tin chuyến để mở khi mất sóng
 let trip = JSON.parse(localStorage.getItem(KT) || 'null');
+let anhCho = [], phiNhap = '';
 let lyDo = '', gc = '', loiGui = '', daGuiLuc = null, kmCuoi = 0, dangGui = false;
 
 const q    = () => JSON.parse(localStorage.getItem(KQ) || '[]');
@@ -70,7 +73,8 @@ function ve() {
   const giuKm = (document.getElementById('km') || {}).value || '';
 
   // ghép số đã gửi lên máy chủ với số còn chờ sóng trên máy
-  const cho = q().filter(x => x.id === ID);
+  const cho = q().filter(x => x.id === ID && x.loai !== 've');
+  const veCho = q().filter(x => x.id === ID && x.loai === 've').length;
   const moc = trip.moc.map((m, i) => {
     const p = cho.find(x => x.moc === i);
     return p ? { ...m, km: p.km, gio: gioNgan(p.gio), cho: true } : m;
@@ -114,6 +118,15 @@ function ve() {
   } else {
     h += `<div class="the xong"><b>✔ Chuyến đã hoàn thành. Cảm ơn bác!</b></div>`;
   }
+
+  h += `<div class="the" style="margin-top:20px"><b>🧾 Vé cầu đường</b>
+    ${trip.phi_cau_duong ? `<div class="nho">Đã gửi tổng: ${so(trip.phi_cau_duong)} đồng</div>` : ''}
+    ${veCho ? `<div class="nho" style="color:var(--cam)">⏳ ${veCho} lượt vé đang chờ sóng</div>` : ''}
+    <label class="nutAnh" style="margin-top:8px">📷 Chụp / chọn ảnh vé (${anhCho.length})
+      <input type="file" accept="image/*" multiple hidden onchange="themAnh(this)"></label>
+    <div>${anhCho.map(a => `<img class="anh" src="data:image/jpeg;base64,${a}">`).join('')}</div>
+    <input id="phi" inputmode="numeric" autocomplete="off" placeholder="Số tiền (đồng)" value="${phiNhap}" oninput="phiNhap=this.value">
+    <button style="margin-top:8px;background:var(--xanh)" onclick="guiVe()">GỬI ẢNH & PHÍ CẦU ĐƯỜNG</button></div>`;
   app.innerHTML = h;
   const k = document.getElementById('km'); if (k) k.value = giuKm;
 }
@@ -133,6 +146,41 @@ function luu(i) {
   ve(); capNhatTT(); gui();
 }
 
+// Nén ảnh trên máy: rộng tối đa 1024px, JPEG 0.75 (~150–250KB/tấm)
+function nen(f) {
+  return new Promise((ok, loi) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 1024 / img.width);
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(img.src);
+      ok(cv.toDataURL('image/jpeg', 0.75).split(',')[1]);
+    };
+    img.onerror = loi;
+    img.src = URL.createObjectURL(f);
+  });
+}
+
+async function themAnh(inp) {
+  for (const f of inp.files) { try { anhCho.push(await nen(f)); } catch (e) {} }
+  inp.value = '';
+  ve();
+}
+
+function guiVe() {
+  const phi = Number(String(phiNhap).replace(/\D/g, ''));
+  if (!anhCho.length) { alert('Bác chụp ít nhất 1 ảnh vé'); return; }
+  if (!confirm('Gửi ' + anhCho.length + ' ảnh vé' + (phi ? ', phí ' + so(phi) + ' đồng' : '') + '?')) return;
+  const a = q();
+  a.push({ loai: 've', id: ID, op: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+           phi: phi, anh: anhCho, gio: new Date().toISOString() });
+  try { luuQ(a); } catch (e) { alert('Máy hết chỗ lưu tạm. Bác đợi có sóng rồi gửi lại.'); return; }
+  anhCho = []; phiNhap = '';
+  ve(); capNhatTT(); gui();
+}
+
 // Gửi lần lượt hàng đợi; mất sóng thì dừng, lần sau gửi tiếp
 async function gui() {
   if (dangGui || !q().length) return;
@@ -144,7 +192,8 @@ async function gui() {
       try { r = await (await fetch(API, { method: 'POST', body: JSON.stringify(x) })).json(); }
       catch (e) { break; }
       if (!r.ok && r.thu_lai) break;
-      if (!r.ok && x.id === ID) loiGui = 'Không lưu được mốc ' + (x.moc + 1) + ': ' + r.loi + '. Bác nhập lại hoặc gọi điều độ.';
+      if (!r.ok && x.id === ID) loiGui = (x.loai === 've' ? 'Không gửi được vé cầu đường: ' : 'Không lưu được mốc ' + (x.moc + 1) + ': ')
+                                         + r.loi + '. Bác gọi điều độ.';
       if (r.ok) daGuiLuc = new Date();
       const a = q(); a.shift(); luuQ(a);
     }
