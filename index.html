@@ -5,13 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PXL – Lệnh vận chuyển</title>
 <style>
-  :root { --xanh:#0a7d32; --cam:#b45309; --do:#b91c1c; --chu:#111; --nen:#f4f4f0; }
+  :root { --xanh:#0a7d32; --cam:#b45309; --do:#b91c1c; --lam:#1d4ed8; --chu:#111; --nen:#f4f4f0; }
   * { box-sizing:border-box; }
   body { margin:0; font:20px/1.45 system-ui, Roboto, Arial, sans-serif; color:var(--chu); background:var(--nen); }
   #tt { position:sticky; top:0; z-index:9; padding:12px 16px; font-weight:700; color:#fff; background:#555; }
-  main { max-width:560px; margin:auto; padding:12px; }
+  main { max-width:560px; margin:auto; padding:12px 12px 40px; }
   .the { background:#fff; border:2px solid #ddd; border-radius:12px; padding:14px; margin-bottom:12px; }
   h1 { font-size:28px; margin:0 0 4px; }
+  h2 { font-size:22px; margin:0 0 6px; }
   .nho { font-size:18px; color:#444; }
   .moc { display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .xong { border-color:var(--xanh); }
@@ -20,42 +21,100 @@
   .loi { color:var(--do); font-weight:700; border-color:var(--do); }
   input, textarea { width:100%; margin-top:8px; padding:12px; font-size:26px; border:2px solid #888; border-radius:10px; }
   textarea { font-size:20px; }
-  button { width:100%; min-height:60px; font-size:22px; font-weight:700; border:0; border-radius:12px; color:#fff; background:#1d4ed8; }
+  button { width:100%; min-height:60px; margin-top:10px; font-size:22px; font-weight:700; border:0; border-radius:12px; color:#fff; background:var(--lam); }
+  button.phu { background:#374151; }
+  button.xanh { background:var(--xanh); }
   .chip { display:inline-block; width:auto; min-height:48px; margin:6px 6px 0 0; padding:8px 14px; font-size:18px; font-weight:600; color:#111; background:#e5e7eb; border:2px solid #bbb; }
   .chip.chon { background:#fde68a; border-color:var(--cam); }
-  .nutAnh { display:block; padding:16px; text-align:center; font-weight:700; color:#fff; background:#1d4ed8; border-radius:12px; }
-  .anh { width:72px; height:72px; object-fit:cover; margin:6px 6px 0 0; border-radius:6px; }
+  .chip.da { background:#dcfce7; border-color:var(--xanh); }
+  .anh { width:72px; height:72px; object-fit:cover; margin:6px 6px 0 0; border-radius:6px; vertical-align:middle; }
+  .o { display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .o button { flex:1; margin-top:0; font-size:18px; min-height:56px; text-align:left; padding:0 14px; }
+  .o button.co { background:var(--xanh); }
 </style>
 </head>
 <body>
 <div id="tt">Đang tải…</div>
 <main id="app"></main>
+<input id="f" type="file" accept="image/*" capture="environment" hidden>
 <script>
 const API = 'https://script.google.com/macros/s/AKfycbxcZsyg5705dew0XQGE-pjvEgNkhj_X8UAuJCkn6jvnoYwk-H6vJeKlxzp350luD9U/exec';
 const ID  = new URLSearchParams(location.search).get('id') || '';
-const KQ  = 'pxl_q';                 // hàng đợi chờ gửi (chung mọi chuyến)
-const KT  = 'pxl_trip_' + ID;        // bản lưu thông tin chuyến để mở khi mất sóng
+const KT  = 'pxl_trip_' + ID;                         // thông tin chuyến lưu sẵn để mở khi mất sóng
+const TEN_DAU = ['① Đồng hồ trước khi đổ (% dầu)', '② Đồng hồ sau khi đổ', '③ Trụ bơm hiện số 00', '④ Trụ bơm số lít đã bơm', '⑤ Hoá đơn (nếu đổ ngoài)'];
 let trip = JSON.parse(localStorage.getItem(KT) || 'null');
-let anhCho = [], phiNhap = '';
-let lyDo = '', gc = '', loiGui = '', daGuiLuc = null, kmCuoi = 0, dangGui = false;
+let Q = [];                                           // hàng đợi chờ gửi (đọc từ IndexedDB)
+let anhOdo = null, lyDo = [], gc = '';
+let bbgn = [], dau = [null, null, null, null, null], lit = '', veAnh = [], phi = '';
+let loiGui = '', daGuiLuc = null, kmCuoi = 0, dangGui = false, choAnh = null;
+localStorage.removeItem('pxl_q');                     // hàng đợi bản cũ (không có ảnh) – bỏ
 
-const q    = () => JSON.parse(localStorage.getItem(KQ) || '[]');
-const luuQ = a => localStorage.setItem(KQ, JSON.stringify(a));
-const so   = n => Number(n).toLocaleString('vi-VN');
-const coKm = m => m.km !== '' && m.km != null;
-const p2   = n => String(n).padStart(2, '0');
-const gioNgan = d => { const t = new Date(d); return p2(t.getDate()) + '/' + p2(t.getMonth() + 1) + ' ' + p2(t.getHours()) + ':' + p2(t.getMinutes()); };
-
-function trangThai(chu, mau) { const t = document.getElementById('tt'); t.textContent = chu; t.style.background = mau; }
-
-function capNhatTT() {
-  const n = q().length;
-  if (n) trangThai('⏳ Đã lưu trên máy, chờ sóng để gửi (' + n + ')', 'var(--cam)');
-  else if (daGuiLuc) trangThai('✔ Đã gửi về điều độ lúc ' + daGuiLuc.toLocaleTimeString('vi-VN', { hour:'2-digit', minute:'2-digit' }), 'var(--xanh)');
-  else if (navigator.onLine) trangThai('✔ Đã kết nối', 'var(--xanh)');
-  else trangThai('Mất sóng – vẫn nhập được bình thường', 'var(--cam)');
+/* ---------- Hàng đợi trong IndexedDB (giữ được nhiều ảnh khi mất sóng) ---------- */
+const DB = new Promise((ok, loi) => {
+  const r = indexedDB.open('pxl', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('q', { keyPath: 'k', autoIncrement: true });
+  r.onsuccess = () => ok(r.result);
+  r.onerror = () => loi(r.error);
+});
+async function kho(mode, f) {
+  const db = await DB;
+  return new Promise((ok, loi) => {
+    const t = db.transaction('q', mode), r = f(t.objectStore('q'));
+    t.oncomplete = () => ok(r && r.result);
+    t.onerror = () => loi(t.error);
+  });
 }
+async function napQ() { Q = await kho('readonly', s => s.getAll()); }
+async function themQ(x) { await kho('readwrite', s => s.add(x)); await napQ(); }
+async function xoaQ(k) { await kho('readwrite', s => s.delete(k)); await napQ(); }
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 
+/* ---------- Tiện ích ---------- */
+const so = n => Number(n).toLocaleString('vi-VN');
+const coKm = m => m.km !== '' && m.km != null;
+const p2 = n => String(n).padStart(2, '0');
+const gioNgan = d => { const t = new Date(d); return p2(t.getDate()) + '/' + p2(t.getMonth() + 1) + ' ' + p2(t.getHours()) + ':' + p2(t.getMinutes()); };
+const maLuot = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const chiSo = s => Number(String(s).replace(/\D/g, ''));
+const _url = new WeakMap();
+const hinh = b => { if (!_url.has(b)) _url.set(b, URL.createObjectURL(b)); return `<img class="anh" src="${_url.get(b)}">`; };
+const cuaToi = loai => Q.filter(x => x.id === ID && (x.loai || 'km') === loai);
+
+// Nén ảnh: rộng tối đa 1024px, JPEG 0.6 (~150–250KB)
+function nen(f) {
+  return new Promise((ok, loi) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 1024 / img.width);
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(img.src);
+      cv.toBlob(b => b ? ok(b) : loi(), 'image/jpeg', 0.6);
+    };
+    img.onerror = loi;
+    img.src = URL.createObjectURL(f);
+  });
+}
+const b64 = b => new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result.split(',')[1]); r.readAsDataURL(b); });
+
+// Mở camera; ảnh chụp xong đưa vào hàm nhận
+function chup(nhan) { choAnh = nhan; const f = document.getElementById('f'); f.value = ''; f.click(); }
+document.getElementById('f').onchange = async e => {
+  const file = e.target.files[0];
+  if (!file || !choAnh) return;
+  try { choAnh(await nen(file)); } catch (_) { alert('Không đọc được ảnh, bác chụp lại giúp cháu'); }
+  ve();
+};
+
+/* ---------- Tải chuyến ---------- */
+function trangThai(chu, mau) { const t = document.getElementById('tt'); t.textContent = chu; t.style.background = mau; }
+function capNhatTT() {
+  if (Q.length) trangThai('⏳ Đã lưu trên máy, chờ sóng để gửi (' + Q.length + ')', 'var(--cam)');
+  else if (daGuiLuc) trangThai('✔ Đã gửi về điều độ lúc ' + p2(daGuiLuc.getHours()) + ':' + p2(daGuiLuc.getMinutes()), 'var(--xanh)');
+  else if (navigator.onLine) trangThai('✔ Đã kết nối', 'var(--xanh)');
+  else trangThai('Mất sóng – vẫn nhập và chụp bình thường', 'var(--cam)');
+}
 async function taiChuyen() {
   if (!ID) { trangThai('Link thiếu mã chuyến – bác gọi điều độ', 'var(--do)'); return; }
   try {
@@ -63,25 +122,25 @@ async function taiChuyen() {
     if (!r.ok) { trangThai(r.loi, 'var(--do)'); return; }
     trip = r;
     localStorage.setItem(KT, JSON.stringify(r));
-  } catch (e) { /* mất sóng: dùng bản đã lưu trên máy */ }
+  } catch (e) { /* mất sóng: dùng bản đã lưu */ }
   ve(); capNhatTT();
 }
 
+/* ---------- Vẽ trang ---------- */
 function ve() {
   const app = document.getElementById('app');
   if (!trip) { app.innerHTML = '<div class="the">Chưa tải được chuyến. Bác mở lại khi có sóng.</div>'; return; }
   const giuKm = (document.getElementById('km') || {}).value || '';
 
-  // ghép số đã gửi lên máy chủ với số còn chờ sóng trên máy
-  const cho = q().filter(x => x.id === ID && x.loai !== 've');
-  const veCho = q().filter(x => x.id === ID && x.loai === 've').length;
+  const choKm = cuaToi('km');
   const moc = trip.moc.map((m, i) => {
-    const p = cho.find(x => x.moc === i);
+    const p = choKm.find(x => x.moc === i);
     return p ? { ...m, km: p.km, gio: gioNgan(p.gio), cho: true } : m;
   });
-  const daCo = moc.filter(coKm);
-  const tiep = moc.findIndex(m => !coKm(m));
+  const daCo = moc.filter(coKm), tiep = moc.findIndex(m => !coKm(m));
   kmCuoi = daCo.length ? Number(daCo[daCo.length - 1].km) : 0;
+  const coBBGN = (trip.so_bbgn || 0) + cuaToi('bbgn').length;
+  const lyDoDaCo = (trip.ly_do_da_co || []).concat(...choKm.map(x => x.ly_do || []));
 
   let h = `<div class="the"><h1>${trip.ma_lenh}</h1>
     <div><b>${trip.loai_hang}</b> – ${trip.khoi_luong}</div>
@@ -94,108 +153,124 @@ function ve() {
       ${trip.ghi_chu ? `<div style="margin-top:8px;padding:8px;background:#fef3c7;border-radius:8px">📝 ${trip.ghi_chu}</div>` : ''}
     </div>`;
 
+  // 4 mốc km
   moc.forEach((m, i) => {
     if (coKm(m)) {
       h += `<div class="the moc ${m.cho ? 'cho' : 'xong'}"><span>${i + 1}. ${m.ten}</span>
         <b style="text-align:right">${m.cho ? '⏳' : '✔'} ${so(m.km)} km<br><span class="nho">${m.gio}${m.cho ? ' – chờ sóng' : ''}</span></b></div>`;
     } else if (i === tiep) {
       h += `<div class="the"><label for="km"><b>${i + 1}. Km lúc ${m.ten.toLowerCase()}</b></label>
-        <input id="km" inputmode="numeric" pattern="[0-9]*" autocomplete="off"
-               placeholder="${kmCuoi ? 'Lớn hơn ' + so(kmCuoi) : 'Số trên đồng hồ'}"></div>`;
+        <input id="km" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="${kmCuoi ? 'Lớn hơn ' + so(kmCuoi) : 'Số trên đồng hồ'}">
+        <div class="o"><button class="${anhOdo ? 'co' : 'phu'}" onclick="chup(b => anhOdo = b)">📷 ${anhOdo ? 'Chụp lại đồng hồ' : 'Chụp đồng hồ km'}</button>${anhOdo ? hinh(anhOdo) : ''}</div>
+        ${i === 3 && !coBBGN ? `<div class="loi" style="margin-top:8px">Bác gửi biên bản giao nhận (phía dưới) trước khi hoàn thành chuyến</div>` : ''}</div>`;
     } else {
       h += `<div class="the mo">${i + 1}. ${m.ten} – chưa tới</div>`;
     }
   });
-
   if (daCo.length >= 2) h += `<div class="the">Đã chạy: <b>${so(kmCuoi - Number(daCo[0].km))} km</b></div>`;
   if (loiGui) h += `<div class="the loi">${loiGui}</div>`;
 
   if (tiep >= 0) {
-    h += `<div class="the"><b>Bị trễ? (không bắt buộc)</b><div>
-      ${trip.ds_ly_do.map(l => `<button class="chip ${lyDo === l.ma ? 'chon' : ''}" onclick="chonLyDo('${l.ma}')">${l.ten}</button>`).join('')}
+    h += `<div class="the"><b>Bị trễ? (không bắt buộc, chọn được nhiều)</b><div>
+      ${trip.ds_ly_do.map(l => lyDoDaCo.includes(l.ma)
+          ? `<button class="chip da" disabled>✔ ${l.ten}</button>`
+          : `<button class="chip ${lyDo.includes(l.ma) ? 'chon' : ''}" onclick="chonLyDo('${l.ma}')">${l.ten}</button>`).join('')}
       </div><textarea id="gc" rows="2" placeholder="Ghi chú thêm (nếu có)" oninput="gc=this.value">${gc}</textarea></div>
-      <button onclick="luu(${tiep})">${tiep === 3 ? 'LƯU & HOÀN THÀNH CHUYẾN' : 'LƯU CẬP NHẬT'}</button>`;
+      <button onclick="luuKm(${tiep})">${tiep === 3 ? 'LƯU & HOÀN THÀNH CHUYẾN' : 'LƯU CẬP NHẬT'}</button>`;
   } else {
     h += `<div class="the xong"><b>✔ Chuyến đã hoàn thành. Cảm ơn bác!</b></div>`;
   }
 
-  h += `<div class="the" style="margin-top:20px"><b>🧾 Vé cầu đường</b>
+  // Biên bản giao nhận
+  h += `<div class="the" style="margin-top:24px"><h2>📄 Biên bản giao nhận</h2>
+    <div class="nho">${coBBGN ? '✔ Đã có ' + coBBGN + ' lần gửi' + (cuaToi('bbgn').length ? ' (đang chờ sóng)' : '') : 'Chưa có – bắt buộc trước khi về bãi'}</div>
+    <div>${bbgn.map(hinh).join('')}</div>
+    <button class="phu" onclick="chup(b => bbgn.push(b))">📷 Chụp ${bbgn.length ? 'thêm trang' : 'biên bản'} (${bbgn.length})</button>
+    ${bbgn.length ? `<button class="xanh" onclick="guiBBGN()">GỬI BIÊN BẢN</button>` : ''}</div>`;
+
+  // Đổ dầu
+  const soDau = (trip.so_lan_dau || 0) + cuaToi('dau').length;
+  h += `<div class="the"><h2>⛽ Đổ dầu</h2>
+    ${soDau ? `<div class="nho">Đã gửi ${soDau} lần</div>` : ''}
+    ${TEN_DAU.map((t, k) => `<div class="o"><button class="${dau[k] ? 'co' : 'phu'}" onclick="chup(b => dau[${k}] = b)">${dau[k] ? '✔ ' : '📷 '}${t}</button>${dau[k] ? hinh(dau[k]) : ''}</div>`).join('')}
+    <input id="lit" inputmode="decimal" autocomplete="off" placeholder="Số lít đã bơm (xem ảnh ④)" value="${lit}" oninput="lit=this.value">
+    <button class="xanh" onclick="guiDau()">GỬI ẢNH ĐỔ DẦU</button></div>`;
+
+  // Vé cầu đường
+  h += `<div class="the"><h2>🧾 Vé cầu đường</h2>
     ${trip.phi_cau_duong ? `<div class="nho">Đã gửi tổng: ${so(trip.phi_cau_duong)} đồng</div>` : ''}
-    ${veCho ? `<div class="nho" style="color:var(--cam)">⏳ ${veCho} lượt vé đang chờ sóng</div>` : ''}
-    <label class="nutAnh" style="margin-top:8px">📷 Chụp / chọn ảnh vé (${anhCho.length})
-      <input type="file" accept="image/*" multiple hidden onchange="themAnh(this)"></label>
-    <div>${anhCho.map(a => `<img class="anh" src="data:image/jpeg;base64,${a}">`).join('')}</div>
-    <input id="phi" inputmode="numeric" autocomplete="off" placeholder="Số tiền (đồng)" value="${phiNhap}" oninput="phiNhap=this.value">
-    <button style="margin-top:8px;background:var(--xanh)" onclick="guiVe()">GỬI ẢNH & PHÍ CẦU ĐƯỜNG</button></div>`;
+    ${cuaToi('ve').length ? `<div class="nho" style="color:var(--cam)">⏳ ${cuaToi('ve').length} lượt vé đang chờ sóng</div>` : ''}
+    <div>${veAnh.map(hinh).join('')}</div>
+    <button class="phu" onclick="chup(b => veAnh.push(b))">📷 Chụp vé (${veAnh.length})</button>
+    <input id="phi" inputmode="numeric" autocomplete="off" placeholder="Số tiền (đồng)" value="${phi}" oninput="phi=this.value">
+    <button class="xanh" onclick="guiVe()">GỬI ẢNH & PHÍ CẦU ĐƯỜNG</button></div>`;
+
   app.innerHTML = h;
   const k = document.getElementById('km'); if (k) k.value = giuKm;
 }
 
-function chonLyDo(ma) { lyDo = (lyDo === ma) ? '' : ma; ve(); }
+function chonLyDo(ma) { lyDo = lyDo.includes(ma) ? lyDo.filter(x => x !== ma) : lyDo.concat(ma); ve(); }
 
-function luu(i) {
-  const km = Number((document.getElementById('km').value || '').replace(/\D/g, ''));
+/* ---------- Lưu (vào hàng đợi rồi gửi) ---------- */
+async function datVao(x) {
+  try { await themQ({ ...x, id: ID, op: maLuot(), gio: new Date().toISOString() }); }
+  catch (e) { alert('Máy hết chỗ lưu tạm. Bác đợi có sóng rồi gửi lại.'); return false; }
+  loiGui = ''; ve(); capNhatTT(); gui();
+  return true;
+}
+
+async function luuKm(i) {
+  const km = chiSo((document.getElementById('km') || {}).value || '');
   if (!(km > 0)) { alert('Bác nhập số km trên đồng hồ'); return; }
   if (kmCuoi && km < kmCuoi) { alert('Số km phải lớn hơn ' + so(kmCuoi)); return; }
+  if (!anhOdo) { alert('Bác chụp ảnh đồng hồ km trước khi lưu'); return; }
+  if (i === 3 && !((trip.so_bbgn || 0) + cuaToi('bbgn').length)) { alert('Bác gửi biên bản giao nhận trước khi hoàn thành chuyến'); return; }
   if (!confirm('Lưu ' + so(km) + ' km cho mốc "' + trip.moc[i].ten + '"?')) return;
-  const a = q();
-  a.push({ id: ID, moc: i, km: km, gio: new Date().toISOString(), ly_do_tre: lyDo, ghi_chu_tai_xe: gc });
-  luuQ(a);
-  lyDo = ''; gc = ''; loiGui = '';
   document.getElementById('km').value = '';
-  ve(); capNhatTT(); gui();
+  const ok = await datVao({ loai: 'km', moc: i, km: km, anh: anhOdo, ly_do: lyDo, ghi_chu_tai_xe: gc });
+  if (ok) { anhOdo = null; lyDo = []; gc = ''; ve(); }
 }
 
-// Nén ảnh trên máy: rộng tối đa 1024px, JPEG 0.75 (~150–250KB/tấm)
-function nen(f) {
-  return new Promise((ok, loi) => {
-    const img = new Image();
-    img.onload = () => {
-      const s = Math.min(1, 1024 / img.width);
-      const cv = document.createElement('canvas');
-      cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
-      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-      URL.revokeObjectURL(img.src);
-      ok(cv.toDataURL('image/jpeg', 0.75).split(',')[1]);
-    };
-    img.onerror = loi;
-    img.src = URL.createObjectURL(f);
-  });
+async function guiBBGN() {
+  if (!bbgn.length) return;
+  if (!confirm('Gửi ' + bbgn.length + ' ảnh biên bản?')) return;
+  if (await datVao({ loai: 'bbgn', anh: bbgn })) { bbgn = []; ve(); }
 }
 
-async function themAnh(inp) {
-  for (const f of inp.files) { try { anhCho.push(await nen(f)); } catch (e) {} }
-  inp.value = '';
-  ve();
+async function guiDau() {
+  const thieu = [0, 1, 2, 3].filter(k => !dau[k]);
+  if (thieu.length) { alert('Bác chụp đủ ảnh ' + thieu.map(k => k + 1).join(', ')); return; }
+  const l = Number(String(lit).replace(',', '.').replace(/[^\d.]/g, ''));
+  if (!(l > 0)) { alert('Bác nhập số lít đã bơm'); return; }
+  if (!confirm('Gửi ảnh đổ dầu, ' + so(l) + ' lít?')) return;
+  if (await datVao({ loai: 'dau', anh: dau, lit: l })) { dau = [null, null, null, null, null]; lit = ''; ve(); }
 }
 
-function guiVe() {
-  const phi = Number(String(phiNhap).replace(/\D/g, ''));
-  if (!anhCho.length) { alert('Bác chụp ít nhất 1 ảnh vé'); return; }
-  if (!confirm('Gửi ' + anhCho.length + ' ảnh vé' + (phi ? ', phí ' + so(phi) + ' đồng' : '') + '?')) return;
-  const a = q();
-  a.push({ loai: 've', id: ID, op: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-           phi: phi, anh: anhCho, gio: new Date().toISOString() });
-  try { luuQ(a); } catch (e) { alert('Máy hết chỗ lưu tạm. Bác đợi có sóng rồi gửi lại.'); return; }
-  anhCho = []; phiNhap = '';
-  ve(); capNhatTT(); gui();
+async function guiVe() {
+  const p = chiSo(phi);
+  if (!veAnh.length) { alert('Bác chụp ít nhất 1 ảnh vé'); return; }
+  if (!confirm('Gửi ' + veAnh.length + ' ảnh vé' + (p ? ', phí ' + so(p) + ' đồng' : '') + '?')) return;
+  if (await datVao({ loai: 've', anh: veAnh, phi: p })) { veAnh = []; phi = ''; ve(); }
 }
 
-// Gửi lần lượt hàng đợi; mất sóng thì dừng, lần sau gửi tiếp
+/* ---------- Gửi lần lượt; mất sóng thì dừng, lần sau gửi tiếp ---------- */
 async function gui() {
-  if (dangGui || !q().length) return;
+  if (dangGui) return;
   dangGui = true;
   try {
-    while (q().length) {
-      const x = q()[0];
+    await napQ();
+    while (Q.length) {
+      const x = Q[0], y = { ...x };
+      delete y.k;
+      if (y.anh instanceof Blob) y.anh = await b64(y.anh);
+      else if (Array.isArray(y.anh)) y.anh = await Promise.all(y.anh.map(a => a ? b64(a) : null));
       let r;
-      try { r = await (await fetch(API, { method: 'POST', body: JSON.stringify(x) })).json(); }
+      try { r = await (await fetch(API, { method: 'POST', body: JSON.stringify(y) })).json(); }
       catch (e) { break; }
       if (!r.ok && r.thu_lai) break;
-      if (!r.ok && x.id === ID) loiGui = (x.loai === 've' ? 'Không gửi được vé cầu đường: ' : 'Không lưu được mốc ' + (x.moc + 1) + ': ')
-                                         + r.loi + '. Bác gọi điều độ.';
+      if (!r.ok && x.id === ID) loiGui = 'Không gửi được (' + ({ km: 'mốc ' + (x.moc + 1), bbgn: 'biên bản', dau: 'đổ dầu', ve: 'vé' }[x.loai]) + '): ' + r.loi + '. Bác làm lại hoặc gọi điều độ.';
       if (r.ok) daGuiLuc = new Date();
-      const a = q(); a.shift(); luuQ(a);
+      await xoaQ(x.k);
     }
   } finally { dangGui = false; }
   await taiChuyen();
@@ -203,10 +278,9 @@ async function gui() {
 
 window.addEventListener('online', gui);
 window.addEventListener('offline', capNhatTT);
-setInterval(gui, 15000);
+setInterval(() => { if (Q.length) gui(); }, 15000);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
-ve(); capNhatTT();
-taiChuyen().then(gui);
+napQ().then(() => { ve(); capNhatTT(); return taiChuyen(); }).then(gui);
 </script>
 </body>
 </html>
