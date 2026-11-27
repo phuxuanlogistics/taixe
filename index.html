@@ -272,7 +272,7 @@ function veKiemHang(d) {
       <div>${c.anh.map(hinh).join('')}</div>
       <button class="phu" onclick="chup(b => ck('${d}','${k.id}').anh.push(b))">📷 Ảnh toàn cảnh, dọc thân, các góc (${c.anh.length})</button>
       <div>${['Bình thường', 'Hư hỏng', 'Thiếu'].map(t => `<button class="chip ${tt === t ? (c.tt ? 'chon' : 'da') : ''}" onclick="chonTT('${d}','${k.id}','${t}')">${t}</button>`).join('')}</div>
-      ${tt === 'Hư hỏng' || tt === 'Thiếu' ? `<textarea rows="2" placeholder="Mô tả (hư chỗ nào, thiếu gì)" oninput="ck('${d}','${k.id}').gc=this.value">${c.gc}</textarea>` : ''}
+      ${tt === 'Hư hỏng' || tt === 'Thiếu' ? `<textarea rows="2" placeholder="Bắt buộc: hư chỗ nào, thiếu gì" oninput="ck('${d}','${k.id}').gc=this.value">${c.gc}</textarea>` : ''}
       ${coCho(c) ? `<button class="xanh" onclick="guiKien('${d}','${k.id}')">GỬI KIỆN NÀY</button>` : ''}</div>`;
   });
   const cho = ds.filter(k => coCho(ck(d, k.id)));
@@ -280,15 +280,19 @@ function veKiemHang(d) {
   return h;
 }
 function chonTT(d, id, t) { const c = ck(d, id); c.tt = c.tt === t ? '' : t; ve(); }
+const canMoTa = c => (c.tt === 'Hư hỏng' || c.tt === 'Thiếu') && !String(c.gc).trim();
 function goiKien(d, id) {
   const c = ck(d, id);
   return { loai: 'kien', dau: d, ckl: id, anh_ma: c.ma, anh: c.anh, tinh_trang: c.tt, ghi_chu: c.gc };
 }
 async function guiKien(d, id) {
+  if (canMoTa(ck(d, id))) { alert('Bác ghi mô tả: hư chỗ nào, thiếu gì'); return; }
   if (await datVao(goiKien(d, id))) { delete chuaKien[d + '|' + id]; ve(); }
 }
 async function guiTatCa(d) {
   const ds = (trip.kien || []).filter(k => coCho(ck(d, k.id)));
+  const thieu = ds.filter(k => canMoTa(ck(d, k.id)));
+  if (thieu.length) { alert('Bác ghi mô tả cho kiện: ' + thieu.map(k => k.ma).join(', ')); return; }
   if (!confirm('Gửi ảnh ' + ds.length + ' kiện?')) return;
   for (const k of ds) if (await datVao(goiKien(d, k.id))) delete chuaKien[d + '|' + k.id];
   ve();
