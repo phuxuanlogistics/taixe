@@ -47,12 +47,12 @@ const API = 'https://script.google.com/macros/s/AKfycbxcZsyg5705dew0XQGE-pjvEgNk
 const ID  = new URLSearchParams(location.search).get('id') || '';
 const KH  = new URLSearchParams(location.search).get('kh') === '1';   // link kiểm hàng: chỉ chụp biên bản + ảnh kiện
 const KT  = 'pxl_trip_' + ID;                         // thông tin chuyến lưu sẵn để mở khi mất sóng
-const TEN_DAU = ['① Đồng hồ trước khi đổ (% dầu)', '② Đồng hồ sau khi đổ', '③ Trụ bơm hiện số 00', '④ Trụ bơm số lít đã bơm', '⑤ Hoá đơn (nếu đổ ngoài)'];
+const TEN_DAU = ['① Odo trước khi đổ', '② Odo sau khi đổ', '③ Trụ bơm hiện số 00', '④ Trụ bơm số lít đã bơm', '⑤ Xe thấy rõ biển số', '⑥ Hoá đơn (nếu đổ ngoài)'];
 let trip = JSON.parse(localStorage.getItem(KT) || 'null');
 let Q = [];                                           // hàng đợi chờ gửi (đọc từ IndexedDB)
 let anhOdo = null, lyDo = [], gc = '';
-let bb = { NHAN: [], GIAO: [] }, dau = [null, null, null, null, null], lit = '', veAnh = [], phi = '';
-let chuaKien = {}, dauXem = null;                       // ảnh kiện chưa gửi: khoá 'NHAN|id' → { anh, tt, gc }
+let bb = { NHAN: [], GIAO: [] }, dau = [null, null, null, null, null, null], lit = '', veAnh = [], phi = '';
+let chuaKien = {}, dauXem = null;                       // ảnh kiện chưa gửi: khoá 'NHAN|id' → { ma, anh, tt, gc }
 let loiGui = '', daGuiLuc = null, kmCuoi = 0, dangGui = false, choAnh = null;
 localStorage.removeItem('pxl_q');                     // hàng đợi bản cũ (không có ảnh) – bỏ
 
@@ -88,9 +88,13 @@ const hinh = b => { if (!_url.has(b)) _url.set(b, URL.createObjectURL(b)); retur
 const cuaToi = loai => Q.filter(x => x.id === ID && (x.loai || 'km') === loai);
 const CHU = { NHAN: 'nhận', GIAO: 'giao' };
 const soBB = d => (d === 'NHAN' ? (trip.so_bb_nhan || 0) : (trip.so_bbgn || 0)) + cuaToi('bbgn').filter(x => (x.dau || 'GIAO') === d).length;
-const soAnhKien = (k, d) => (d === 'NHAN' ? k.nhan : k.giao) + cuaToi('kien').filter(x => x.ckl === k.id && x.dau === d).reduce((s, x) => s + x.anh.length, 0);
-const thieuKien = d => (trip.kien || []).filter(k => soAnhKien(k, d) < trip.so_anh_kien);
-const ck = (d, id) => chuaKien[d + '|' + id] || (chuaKien[d + '|' + id] = { anh: [], tt: '', gc: '' });
+const choKien = (k, d) => cuaToi('kien').filter(x => x.ckl === k.id && x.dau === d);
+const soAnhKien = (k, d) => (d === 'NHAN' ? k.nhan : k.giao) + choKien(k, d).reduce((s, x) => s + x.anh.length + (x.anh_ma ? 1 : 0), 0);
+const coMaKien = (k, d) => (d === 'NHAN' ? k.ma_nhan : k.ma_giao) || choKien(k, d).some(x => x.anh_ma);
+const duKien = (k, d) => coMaKien(k, d) && soAnhKien(k, d) >= trip.so_anh_kien;
+const thieuKien = d => (trip.kien || []).filter(k => !duKien(k, d));
+const ck = (d, id) => chuaKien[d + '|' + id] || (chuaKien[d + '|' + id] = { ma: null, anh: [], tt: '', gc: '' });
+const coCho = c => c.ma || c.anh.length || c.tt;
 // Hàng dự án: trước mốc Điểm nhận (1) / Điểm giao (2) phải có biên bản + đủ ảnh từng kiện ở đầu đó
 function thieuMoc(i) {
   if (!trip.theo_kien || (i !== 1 && i !== 2)) return '';
@@ -250,7 +254,7 @@ function veKiemHang(d) {
     <div class="tab"><button class="${d === 'NHAN' ? 'chon' : ''}" onclick="dauXem='NHAN';ve()">Đầu nhận</button>
       <button class="${d === 'GIAO' ? 'chon' : ''}" onclick="dauXem='GIAO';ve()">Đầu giao</button></div>
     <div style="margin-top:8px"><b>${d === 'NHAN' ? trip.diem_nhan : trip.diem_giao}</b></div>
-    <div class="nho">Mỗi kiện ít nhất ${n} ảnh: 1 ảnh rõ mã kiện + ảnh toàn cảnh các góc</div>
+    <div class="nho">Mỗi kiện: <b>1 ảnh đọc rõ mã kiện / số khung</b> + ảnh toàn cảnh. Hàng dài: chụp thêm dọc thân và các góc.</div>
     <div class="nho">Đủ ảnh: <b>${du}/${ds.length} kiện</b> · Biên bản: <b>${soBB(d) ? '✔' : 'chưa có'}</b></div></div>`;
   h += `<div class="the ${soBB(d) ? 'xong' : 'cho'}"><b>📄 Biên bản ${CHU[d]} hàng</b>
     <div class="nho">${soBB(d) ? '✔ Đã có ' + soBB(d) + ' lần gửi' + (choBB ? ' (đang chờ sóng)' : '') : 'Chưa có – bắt buộc'}</div>
@@ -259,30 +263,32 @@ function veKiemHang(d) {
     ${bb[d].length ? `<button class="xanh" onclick="guiBBGN('${d}')">GỬI BIÊN BẢN</button>` : ''}</div>`;
   if (!ds.length) h += `<div class="the loi">Lệnh chưa có kiện hàng. Bác gọi điều độ thêm kiện vào lệnh.</div>`;
   ds.forEach(k => {
-    const c = ck(d, k.id), so = soAnhKien(k, d), tt = c.tt || k.tinh_trang;
-    h += `<div class="the kien ${so >= n ? 'du' : ''}">
+    const c = ck(d, k.id), so = soAnhKien(k, d), tt = c.tt || k.tinh_trang, du = duKien(k, d), coMa = coMaKien(k, d);
+    const nhanSo = du ? '✔ ' + so + ' ảnh' : !coMa && !c.ma ? 'Thiếu ảnh mã' : 'Thiếu ' + Math.max(1, n - so - c.anh.length - (c.ma ? 1 : 0)) + ' ảnh';
+    h += `<div class="the kien ${du ? 'du' : ''}">
       <div class="moc"><span><b>${k.ma}</b><br><span class="nho">${k.loai}</span></span>
-        <b style="text-align:right">${so >= n ? '✔' : ''} ${so}/${n} ảnh</b></div>
+        <b style="text-align:right;color:${du ? 'var(--xanh)' : 'var(--cam)'}">${nhanSo}</b></div>
+      <div class="o"><button class="${c.ma || coMa ? 'co' : 'phu'}" onclick="chup(b => ck('${d}','${k.id}').ma = b)">${c.ma || coMa ? '✔' : '🔢'} Ảnh mã kiện / số khung${coMa && !c.ma ? ' (đã có, chụp lại nếu mờ)' : ''}</button>${c.ma ? hinh(c.ma) : ''}</div>
       <div>${c.anh.map(hinh).join('')}</div>
-      <button class="phu" onclick="chup(b => ck('${d}','${k.id}').anh.push(b))">📷 Chụp ảnh kiện (${c.anh.length})</button>
+      <button class="phu" onclick="chup(b => ck('${d}','${k.id}').anh.push(b))">📷 Ảnh toàn cảnh, dọc thân, các góc (${c.anh.length})</button>
       <div>${['Bình thường', 'Hư hỏng', 'Thiếu'].map(t => `<button class="chip ${tt === t ? (c.tt ? 'chon' : 'da') : ''}" onclick="chonTT('${d}','${k.id}','${t}')">${t}</button>`).join('')}</div>
       ${tt === 'Hư hỏng' || tt === 'Thiếu' ? `<textarea rows="2" placeholder="Mô tả (hư chỗ nào, thiếu gì)" oninput="ck('${d}','${k.id}').gc=this.value">${c.gc}</textarea>` : ''}
-      ${c.anh.length || c.tt ? `<button class="xanh" onclick="guiKien('${d}','${k.id}')">GỬI KIỆN NÀY</button>` : ''}</div>`;
+      ${coCho(c) ? `<button class="xanh" onclick="guiKien('${d}','${k.id}')">GỬI KIỆN NÀY</button>` : ''}</div>`;
   });
-  const cho = ds.filter(k => { const c = ck(d, k.id); return c.anh.length || c.tt; });
+  const cho = ds.filter(k => coCho(ck(d, k.id)));
   if (cho.length > 1) h += `<button class="xanh" onclick="guiTatCa('${d}')">GỬI TẤT CẢ (${cho.length} kiện)</button>`;
   return h;
 }
 function chonTT(d, id, t) { const c = ck(d, id); c.tt = c.tt === t ? '' : t; ve(); }
 function goiKien(d, id) {
   const c = ck(d, id);
-  return { loai: 'kien', dau: d, ckl: id, anh: c.anh, tinh_trang: c.tt, ghi_chu: c.gc };
+  return { loai: 'kien', dau: d, ckl: id, anh_ma: c.ma, anh: c.anh, tinh_trang: c.tt, ghi_chu: c.gc };
 }
 async function guiKien(d, id) {
   if (await datVao(goiKien(d, id))) { delete chuaKien[d + '|' + id]; ve(); }
 }
 async function guiTatCa(d) {
-  const ds = (trip.kien || []).filter(k => { const c = ck(d, k.id); return c.anh.length || c.tt; });
+  const ds = (trip.kien || []).filter(k => coCho(ck(d, k.id)));
   if (!confirm('Gửi ảnh ' + ds.length + ' kiện?')) return;
   for (const k of ds) if (await datVao(goiKien(d, k.id))) delete chuaKien[d + '|' + k.id];
   ve();
@@ -318,12 +324,12 @@ async function guiBBGN(d) {
 }
 
 async function guiDau() {
-  const thieu = [0, 1, 2, 3].filter(k => !dau[k]);
+  const thieu = [0, 1, 2, 3, 4].filter(k => !dau[k]);
   if (thieu.length) { alert('Bác chụp đủ ảnh ' + thieu.map(k => k + 1).join(', ')); return; }
   const l = Number(String(lit).replace(',', '.').replace(/[^\d.]/g, ''));
   if (!(l > 0)) { alert('Bác nhập số lít đã bơm'); return; }
   if (!confirm('Gửi ảnh đổ dầu, ' + so(l) + ' lít?')) return;
-  if (await datVao({ loai: 'dau', anh: dau, lit: l })) { dau = [null, null, null, null, null]; lit = ''; ve(); }
+  if (await datVao({ loai: 'dau', anh: dau, lit: l })) { dau = [null, null, null, null, null, null]; lit = ''; ve(); }
 }
 
 async function guiVe() {
@@ -342,6 +348,7 @@ async function gui() {
     while (Q.length) {
       const x = Q[0], y = { ...x };
       delete y.k;
+      if (y.anh_ma) y.anh_ma = await b64(y.anh_ma);
       if (y.anh instanceof Blob) y.anh = await b64(y.anh);
       else if (Array.isArray(y.anh)) y.anh = await Promise.all(y.anh.map(a => a ? b64(a) : null));
       let r;
