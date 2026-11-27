@@ -1,5 +1,5 @@
 // Lưu sẵn trang để mở được khi mất sóng. Gọi API thì đi thẳng, không qua bộ nhớ đệm.
-const C = 'pxl-taixe-v2';
+const C = 'pxl-taixe-v3';
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(C).then(c => c.addAll(['./', './index.html'])));
   self.skipWaiting();

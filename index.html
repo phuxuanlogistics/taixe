@@ -31,6 +31,11 @@
   .o { display:flex; align-items:center; gap:8px; margin-top:8px; }
   .o button { flex:1; margin-top:0; font-size:18px; min-height:56px; text-align:left; padding:0 14px; }
   .o button.co { background:var(--xanh); }
+  .kien { border-left:8px solid var(--cam); }
+  .kien.du { border-left-color:var(--xanh); }
+  .tab { display:flex; gap:8px; }
+  .tab button { margin-top:0; min-height:52px; font-size:18px; background:#e5e7eb; color:#111; border:2px solid #bbb; }
+  .tab button.chon { background:var(--lam); color:#fff; border-color:var(--lam); }
 </style>
 </head>
 <body>
@@ -40,12 +45,14 @@
 <script>
 const API = 'https://script.google.com/macros/s/AKfycbxcZsyg5705dew0XQGE-pjvEgNkhj_X8UAuJCkn6jvnoYwk-H6vJeKlxzp350luD9U/exec';
 const ID  = new URLSearchParams(location.search).get('id') || '';
+const KH  = new URLSearchParams(location.search).get('kh') === '1';   // link kiểm hàng: chỉ chụp biên bản + ảnh kiện
 const KT  = 'pxl_trip_' + ID;                         // thông tin chuyến lưu sẵn để mở khi mất sóng
 const TEN_DAU = ['① Đồng hồ trước khi đổ (% dầu)', '② Đồng hồ sau khi đổ', '③ Trụ bơm hiện số 00', '④ Trụ bơm số lít đã bơm', '⑤ Hoá đơn (nếu đổ ngoài)'];
 let trip = JSON.parse(localStorage.getItem(KT) || 'null');
 let Q = [];                                           // hàng đợi chờ gửi (đọc từ IndexedDB)
 let anhOdo = null, lyDo = [], gc = '';
-let bbgn = [], dau = [null, null, null, null, null], lit = '', veAnh = [], phi = '';
+let bb = { NHAN: [], GIAO: [] }, dau = [null, null, null, null, null], lit = '', veAnh = [], phi = '';
+let chuaKien = {}, dauXem = null;                       // ảnh kiện chưa gửi: khoá 'NHAN|id' → { anh, tt, gc }
 let loiGui = '', daGuiLuc = null, kmCuoi = 0, dangGui = false, choAnh = null;
 localStorage.removeItem('pxl_q');                     // hàng đợi bản cũ (không có ảnh) – bỏ
 
@@ -79,6 +86,22 @@ const chiSo = s => Number(String(s).replace(/\D/g, ''));
 const _url = new WeakMap();
 const hinh = b => { if (!_url.has(b)) _url.set(b, URL.createObjectURL(b)); return `<img class="anh" src="${_url.get(b)}">`; };
 const cuaToi = loai => Q.filter(x => x.id === ID && (x.loai || 'km') === loai);
+const CHU = { NHAN: 'nhận', GIAO: 'giao' };
+const soBB = d => (d === 'NHAN' ? (trip.so_bb_nhan || 0) : (trip.so_bbgn || 0)) + cuaToi('bbgn').filter(x => (x.dau || 'GIAO') === d).length;
+const soAnhKien = (k, d) => (d === 'NHAN' ? k.nhan : k.giao) + cuaToi('kien').filter(x => x.ckl === k.id && x.dau === d).reduce((s, x) => s + x.anh.length, 0);
+const thieuKien = d => (trip.kien || []).filter(k => soAnhKien(k, d) < trip.so_anh_kien);
+const ck = (d, id) => chuaKien[d + '|' + id] || (chuaKien[d + '|' + id] = { anh: [], tt: '', gc: '' });
+// Hàng dự án: trước mốc Điểm nhận (1) / Điểm giao (2) phải có biên bản + đủ ảnh từng kiện ở đầu đó
+function thieuMoc(i) {
+  if (!trip.theo_kien || (i !== 1 && i !== 2)) return '';
+  const d = i === 1 ? 'NHAN' : 'GIAO';
+  if (!(trip.kien || []).length) return 'Lệnh chưa có kiện hàng, bác gọi điều độ';
+  const t = [];
+  if (!soBB(d)) t.push('biên bản ' + CHU[d]);
+  const k = thieuKien(d);
+  if (k.length) t.push('ảnh ' + k.length + ' kiện');
+  return t.length ? 'Chưa đủ ' + t.join(' và ') + ' (khung Kiểm hàng phía dưới)' : '';
+}
 
 // Nén ảnh: rộng tối đa 1024px, JPEG 0.6 (~150–250KB)
 function nen(f) {
@@ -139,7 +162,7 @@ function ve() {
   });
   const daCo = moc.filter(coKm), tiep = moc.findIndex(m => !coKm(m));
   kmCuoi = daCo.length ? Number(daCo[daCo.length - 1].km) : 0;
-  const coBBGN = (trip.so_bbgn || 0) + cuaToi('bbgn').length;
+  const coBBGN = soBB('GIAO');
   const lyDoDaCo = (trip.ly_do_da_co || []).concat(...choKm.map(x => x.ly_do || []));
 
   let h = `<div class="the"><h1>${trip.ma_lenh}</h1>
@@ -153,6 +176,14 @@ function ve() {
       ${trip.ghi_chu ? `<div style="margin-top:8px;padding:8px;background:#fef3c7;border-radius:8px">📝 ${trip.ghi_chu}</div>` : ''}
     </div>`;
 
+  const dauMacDinh = coKm(moc[1]) ? 'GIAO' : 'NHAN';
+  if (KH) {                                            // link kiểm hàng: không có km, dầu, vé
+    h += trip.theo_kien ? veKiemHang(dauXem || dauMacDinh) : `<div class="the">Lệnh này không phải hàng dự án, không cần kiểm từng kiện.</div>`;
+    if (loiGui) h += `<div class="the loi">${loiGui}</div>`;
+    app.innerHTML = h;
+    return;
+  }
+
   // 4 mốc km
   moc.forEach((m, i) => {
     if (coKm(m)) {
@@ -162,7 +193,8 @@ function ve() {
       h += `<div class="the"><label for="km"><b>${i + 1}. Km lúc ${m.ten.toLowerCase()}</b></label>
         <input id="km" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="${kmCuoi ? 'Lớn hơn ' + so(kmCuoi) : 'Số trên đồng hồ'}">
         <div class="o"><button class="${anhOdo ? 'co' : 'phu'}" onclick="chup(b => anhOdo = b)">📷 ${anhOdo ? 'Chụp lại đồng hồ' : 'Chụp đồng hồ km'}</button>${anhOdo ? hinh(anhOdo) : ''}</div>
-        ${i === 3 && !coBBGN ? `<div class="loi" style="margin-top:8px">Bác gửi biên bản giao nhận (phía dưới) trước khi hoàn thành chuyến</div>` : ''}</div>`;
+        ${i === 3 && !coBBGN ? `<div class="loi" style="margin-top:8px">Bác gửi biên bản giao nhận (phía dưới) trước khi hoàn thành chuyến</div>` : ''}
+        ${thieuMoc(i) ? `<div class="loi" style="margin-top:8px">${thieuMoc(i)}</div>` : ''}</div>`;
     } else {
       h += `<div class="the mo">${i + 1}. ${m.ten} – chưa tới</div>`;
     }
@@ -181,12 +213,13 @@ function ve() {
     h += `<div class="the xong"><b>✔ Chuyến đã hoàn thành. Cảm ơn bác!</b></div>`;
   }
 
-  // Biên bản giao nhận
-  h += `<div class="the" style="margin-top:24px"><h2>📄 Biên bản giao nhận</h2>
+  // Hàng dự án: khung kiểm hàng (biên bản + ảnh từng kiện). Hàng thường: 1 biên bản giao nhận
+  if (trip.theo_kien) h += `<div style="margin-top:24px"></div>` + veKiemHang(dauXem || dauMacDinh);
+  else h += `<div class="the" style="margin-top:24px"><h2>📄 Biên bản giao nhận</h2>
     <div class="nho">${coBBGN ? '✔ Đã có ' + coBBGN + ' lần gửi' + (cuaToi('bbgn').length ? ' (đang chờ sóng)' : '') : 'Chưa có – bắt buộc trước khi về bãi'}</div>
-    <div>${bbgn.map(hinh).join('')}</div>
-    <button class="phu" onclick="chup(b => bbgn.push(b))">📷 Chụp ${bbgn.length ? 'thêm trang' : 'biên bản'} (${bbgn.length})</button>
-    ${bbgn.length ? `<button class="xanh" onclick="guiBBGN()">GỬI BIÊN BẢN</button>` : ''}</div>`;
+    <div>${bb.GIAO.map(hinh).join('')}</div>
+    <button class="phu" onclick="chup(b => bb.GIAO.push(b))">📷 Chụp ${bb.GIAO.length ? 'thêm trang' : 'biên bản'} (${bb.GIAO.length})</button>
+    ${bb.GIAO.length ? `<button class="xanh" onclick="guiBBGN('GIAO')">GỬI BIÊN BẢN</button>` : ''}</div>`;
 
   // Đổ dầu
   const soDau = (trip.so_lan_dau || 0) + cuaToi('dau').length;
@@ -209,6 +242,52 @@ function ve() {
   const k = document.getElementById('km'); if (k) k.value = giuKm;
 }
 
+/* ---------- Kiểm hàng (hàng dự án) ---------- */
+function veKiemHang(d) {
+  const ds = trip.kien || [], n = trip.so_anh_kien, du = ds.length - thieuKien(d).length;
+  const choBB = cuaToi('bbgn').filter(x => (x.dau || 'GIAO') === d).length;
+  let h = `<div class="the"><h2>📦 Kiểm hàng</h2>
+    <div class="tab"><button class="${d === 'NHAN' ? 'chon' : ''}" onclick="dauXem='NHAN';ve()">Đầu nhận</button>
+      <button class="${d === 'GIAO' ? 'chon' : ''}" onclick="dauXem='GIAO';ve()">Đầu giao</button></div>
+    <div style="margin-top:8px"><b>${d === 'NHAN' ? trip.diem_nhan : trip.diem_giao}</b></div>
+    <div class="nho">Mỗi kiện ít nhất ${n} ảnh: 1 ảnh rõ mã kiện + ảnh toàn cảnh các góc</div>
+    <div class="nho">Đủ ảnh: <b>${du}/${ds.length} kiện</b> · Biên bản: <b>${soBB(d) ? '✔' : 'chưa có'}</b></div></div>`;
+  h += `<div class="the ${soBB(d) ? 'xong' : 'cho'}"><b>📄 Biên bản ${CHU[d]} hàng</b>
+    <div class="nho">${soBB(d) ? '✔ Đã có ' + soBB(d) + ' lần gửi' + (choBB ? ' (đang chờ sóng)' : '') : 'Chưa có – bắt buộc'}</div>
+    <div>${bb[d].map(hinh).join('')}</div>
+    <button class="phu" onclick="chup(b => bb.${d}.push(b))">📷 Chụp ${bb[d].length ? 'thêm trang' : 'biên bản'} (${bb[d].length})</button>
+    ${bb[d].length ? `<button class="xanh" onclick="guiBBGN('${d}')">GỬI BIÊN BẢN</button>` : ''}</div>`;
+  if (!ds.length) h += `<div class="the loi">Lệnh chưa có kiện hàng. Bác gọi điều độ thêm kiện vào lệnh.</div>`;
+  ds.forEach(k => {
+    const c = ck(d, k.id), so = soAnhKien(k, d), tt = c.tt || k.tinh_trang;
+    h += `<div class="the kien ${so >= n ? 'du' : ''}">
+      <div class="moc"><span><b>${k.ma}</b><br><span class="nho">${k.loai}</span></span>
+        <b style="text-align:right">${so >= n ? '✔' : ''} ${so}/${n} ảnh</b></div>
+      <div>${c.anh.map(hinh).join('')}</div>
+      <button class="phu" onclick="chup(b => ck('${d}','${k.id}').anh.push(b))">📷 Chụp ảnh kiện (${c.anh.length})</button>
+      <div>${['Bình thường', 'Hư hỏng', 'Thiếu'].map(t => `<button class="chip ${tt === t ? (c.tt ? 'chon' : 'da') : ''}" onclick="chonTT('${d}','${k.id}','${t}')">${t}</button>`).join('')}</div>
+      ${tt === 'Hư hỏng' || tt === 'Thiếu' ? `<textarea rows="2" placeholder="Mô tả (hư chỗ nào, thiếu gì)" oninput="ck('${d}','${k.id}').gc=this.value">${c.gc}</textarea>` : ''}
+      ${c.anh.length || c.tt ? `<button class="xanh" onclick="guiKien('${d}','${k.id}')">GỬI KIỆN NÀY</button>` : ''}</div>`;
+  });
+  const cho = ds.filter(k => { const c = ck(d, k.id); return c.anh.length || c.tt; });
+  if (cho.length > 1) h += `<button class="xanh" onclick="guiTatCa('${d}')">GỬI TẤT CẢ (${cho.length} kiện)</button>`;
+  return h;
+}
+function chonTT(d, id, t) { const c = ck(d, id); c.tt = c.tt === t ? '' : t; ve(); }
+function goiKien(d, id) {
+  const c = ck(d, id);
+  return { loai: 'kien', dau: d, ckl: id, anh: c.anh, tinh_trang: c.tt, ghi_chu: c.gc };
+}
+async function guiKien(d, id) {
+  if (await datVao(goiKien(d, id))) { delete chuaKien[d + '|' + id]; ve(); }
+}
+async function guiTatCa(d) {
+  const ds = (trip.kien || []).filter(k => { const c = ck(d, k.id); return c.anh.length || c.tt; });
+  if (!confirm('Gửi ảnh ' + ds.length + ' kiện?')) return;
+  for (const k of ds) if (await datVao(goiKien(d, k.id))) delete chuaKien[d + '|' + k.id];
+  ve();
+}
+
 function chonLyDo(ma) { lyDo = lyDo.includes(ma) ? lyDo.filter(x => x !== ma) : lyDo.concat(ma); ve(); }
 
 /* ---------- Lưu (vào hàng đợi rồi gửi) ---------- */
@@ -224,17 +303,18 @@ async function luuKm(i) {
   if (!(km > 0)) { alert('Bác nhập số km trên đồng hồ'); return; }
   if (kmCuoi && km < kmCuoi) { alert('Số km phải lớn hơn ' + so(kmCuoi)); return; }
   if (!anhOdo) { alert('Bác chụp ảnh đồng hồ km trước khi lưu'); return; }
-  if (i === 3 && !((trip.so_bbgn || 0) + cuaToi('bbgn').length)) { alert('Bác gửi biên bản giao nhận trước khi hoàn thành chuyến'); return; }
+  if (i === 3 && !soBB('GIAO')) { alert('Bác gửi biên bản giao nhận trước khi hoàn thành chuyến'); return; }
+  if (thieuMoc(i)) { alert(thieuMoc(i)); return; }
   if (!confirm('Lưu ' + so(km) + ' km cho mốc "' + trip.moc[i].ten + '"?')) return;
   document.getElementById('km').value = '';
   const ok = await datVao({ loai: 'km', moc: i, km: km, anh: anhOdo, ly_do: lyDo, ghi_chu_tai_xe: gc });
   if (ok) { anhOdo = null; lyDo = []; gc = ''; ve(); }
 }
 
-async function guiBBGN() {
-  if (!bbgn.length) return;
-  if (!confirm('Gửi ' + bbgn.length + ' ảnh biên bản?')) return;
-  if (await datVao({ loai: 'bbgn', anh: bbgn })) { bbgn = []; ve(); }
+async function guiBBGN(d) {
+  if (!bb[d].length) return;
+  if (!confirm('Gửi ' + bb[d].length + ' ảnh biên bản ' + CHU[d] + '?')) return;
+  if (await datVao({ loai: 'bbgn', dau: d, anh: bb[d] })) { bb[d] = []; ve(); }
 }
 
 async function guiDau() {
@@ -268,7 +348,7 @@ async function gui() {
       try { r = await (await fetch(API, { method: 'POST', body: JSON.stringify(y) })).json(); }
       catch (e) { break; }
       if (!r.ok && r.thu_lai) break;
-      if (!r.ok && x.id === ID) loiGui = 'Không gửi được (' + ({ km: 'mốc ' + (x.moc + 1), bbgn: 'biên bản', dau: 'đổ dầu', ve: 'vé' }[x.loai]) + '): ' + r.loi + '. Bác làm lại hoặc gọi điều độ.';
+      if (!r.ok && x.id === ID) loiGui = 'Không gửi được (' + ({ km: 'mốc ' + (x.moc + 1), bbgn: 'biên bản', dau: 'đổ dầu', ve: 'vé', kien: 'ảnh kiện' }[x.loai]) + '): ' + r.loi + '. Bác làm lại hoặc gọi điều độ.';
       if (r.ok) daGuiLuc = new Date();
       await xoaQ(x.k);
     }
